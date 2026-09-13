@@ -110,22 +110,28 @@ class NVFilterController:
         return TMP_SCHEMA
 
     # ---------------- استيراد / تصدير ----------------
-    def import_profile(self, path=None):
-        """تحميل بريسيت إلى الخانة النشطة وتحديث العرض فوراً."""
+    def import_profile(self, path=None, slot=None):
+        """تحميل بريسيت إلى الخانة (النشطة افتراضياً) وتحديث العرض فوراً."""
+        target = int(slot or self.current_profile)
         if path is None:
-            path = filedialog.askopenfilename(title=f"استيراد بريسيت للخانة {self.current_profile}",
-                                              filetypes=[("JSON", "*.json")])
+            path = filedialog.askopenfilename(
+                title=f"استيراد بريسيت للخانة {target}",
+                filetypes=[("JSON", "*.json")])
         if not path:
             return None
         with open(path, encoding="utf-8") as fh:
             imported = json.load(fh)
-        profile = self.data["profiles"].setdefault(str(self.current_profile),
-                                                    {"name": "", "accent": ACCENTS.get(self.current_profile), "filters": []})
-        profile["name"] = imported.get("preset_name", imported.get("name", profile.get("name", f"بروفايل {self.current_profile}")))
+        profile = self.data["profiles"].setdefault(str(target),
+                                                    {"name": "",
+                                                     "accent": ACCENTS.get(target),
+                                                     "filters": []})
+        profile["name"] = imported.get("preset_name", imported.get("name", profile.get("name", f"بروفايل {target}")))
         profile["filters"] = imported.get("filters", imported.get("profiles", []) if isinstance(imported, dict) else [])
         if not isinstance(profile["filters"], list):
             profile["filters"] = []
         self.save_data()
+        if self.current_profile != target:
+            self.select_profile(target)
         return profile
 
     def export_profile(self, profile_id=None, path=None):

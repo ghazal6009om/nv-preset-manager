@@ -11,10 +11,58 @@ from tkinter import messagebox, filedialog
 
 import customtkinter as ctk
 
+try:
+    from CTkMessagebox import CTkMessagebox as CTkMB
+    _HAS_CTKMB = True
+except Exception:  # noqa: BLE001
+    _HAS_CTKMB = False
+
+try:
+    from PIL import Image, ImageDraw
+    _HAS_PIL = True
+except Exception:  # noqa: BLE001
+    _HAS_PIL = False
+
 from app_logic import NVFilterController, run_backend, ROOT, TMP_SCHEMA
 
 PRESETS_DIR = os.path.join(ROOT, "presets", "library")
 BACKUPS_DIR = os.path.join(ROOT, "backups")
+
+_THUMB_CACHE = {}
+
+
+def alert(kind, title, msg):
+    if _HAS_CTKMB and kind in ("info", "ok", "question"):
+        CTkMB(title=title, message=msg, icon=kind, option_1="حسناً")
+    else:
+        messagebox.showinfo(title, msg)
+
+
+def _hex_rgb(hex_color):
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _tint(hex_color, factor):
+    r, g, b = _hex_rgb(hex_color)
+    return int(r * factor), int(g * factor), int(b * factor)
+
+
+def make_thumb(accent, w=720, h=92):
+    key = (accent, w, h)
+    if key in _THUMB_CACHE:
+        return _THUMB_CACHE[key]
+    im = Image.new("RGB", (w, h))
+    d = ImageDraw.Draw(im)
+    top = _tint(accent, 0.9)
+    bottom = _tint(accent, 0.22)
+    for y in range(h):
+        t = y / (h - 1)
+        color = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+        d.line([(0, y), (w, y)], fill=color)
+    img = ctk.CTkImage(light_image=im, dark_image=im, size=(w, h))
+    _THUMB_CACHE[key] = img
+    return img
 
 # (display name, min ui, max ui, ui step, default)
 FILTERS = [
@@ -78,6 +126,15 @@ class ProfileBox(ctk.CTkFrame):
         self.active = active
         self._restore()
 
+    _drag_hover = False
+
+    def set_drag_hover(self, on):
+        self._drag_hover = bool(on)
+        if on:
+            self.configure(border_color="#22c55e", border_width=3)
+        else:
+            self._restore()
+
     def _restore(self):
         if getattr(self, "active", False):
             self.configure(border_color=self.accent, border_width=3)
@@ -94,23 +151,52 @@ class ProfileBox(ctk.CTkFrame):
 
 
 class MiniCard(ctk.CTkFrame):
-    """بطاقة بريسيت مدمجة - تحميل إلى الخانة النشطة."""
+    """بطاقة بريسيت مدمجة - تحميل للخانة النشطة + سحب وإفلات."""
 
-    def __init__(self, master, preset, preset_path, on_use, **kw):
+    def __init__(self, master, preset, preset_path, on_use, app, **kw):
         super().__init__(master, corner_radius=12, border_width=1, border_color="#2b3542", **kw)
+        self.preset = preset
+        self.preset_path = preset_path
+        self.app = app
         accent = preset.get("accent", "#3b82f6")
-        strip = ctk.CTkFrame(self, fg_color=accent, corner_radius=6, height=5)
-        strip.pack(fill="x", padx=8, pady=(8, 2))
-        ctk.CTkLabel(self, text=preset.get("preset_name", "بريست"),
-                     font=ctk.CTkFont(size=14, weight="bold"),
-                     text_color="#e2e8f0").pack(anchor="w", padx=12, pady=(4, 0))
+        name = preset.get("preset_name", "بريست")
+
+        if _HAS_PIL:
+            thumb = ctk.CTkLabel(self, image=make_thumb(accent, 720, 84),
+                                 text="", height=84)
+            thumb.pack(fill="x", padx=8, pady=(8, 4))
+        else:
+            strip = ctk.CTkFrame(self, fg_color=accent, corner_radius=6, height=5)
+            strip.pack(fill="x", padx=8, pady=(8, 6))
+
+        ctk.CTkLabel(self, text=name, font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#e2e8f0").pack(anchor="w", padx=12, pady=(2, 2))
         chips = "  ".join(f["name"] for f in preset.get("filters", []))
         if chips:
             ctk.CTkLabel(self, text=chips, text_color="#64748b",
-                         font=ctk.CTkFont(size=10)).pack(anchor="w", padx=12)
-        ctk.CTkButton(self, text="⬇ تحميل إلى الخانة النشطة", height=30, corner_radius=8,
-                      fg_color="#1e293b", hover_color="#334155", text_color="#cbd5e1",
-                      command=lambda: on_use(preset_path)).pack(anchor="e", padx=10, pady=(8, 10))
+                         font=ctk.CTkFont(size=10)).pack(anchor="w", padx=12, pady=(0, 6))
+
+        self._load_btn = ctk.CTkButton(self, height=30, corner_radius=8,
+                                       fg_color="#1e293b", hover_color="#334155",
+                                       text_color="#cbd5e1", font=ctk.CTkFont(size=12, weight="bold"),
+                                       command=lambda: on_use(preset_path))
+        self._load_btn.pack(fill="x", padx=10, pady=(2, 10))
+        self._bind_drag(accent)
+
+    def _bind_drag(self, accent):
+        targets = [self._canvas]
+        for lbl in self.winfo_children():
+            if isinstance(lbl, ctk.CTkLabel):
+                for attr in ("_label", "_canvas"):
+                    w = getattr(lbl, attr, None)
+                    if w is not None:
+                        targets.append(w)
+        for w in targets:
+            w.bind("<ButtonPress-1>",
+                   lambda e, c=self: self.app._dnd_start(e, c), add="+")
+
+    def set_slot_button(self, slot):
+        self._load_btn.configure(text=f"تحميل للخانة {slot} ⚡")
 
 
 class App(ctk.CTk):
@@ -125,11 +211,17 @@ class App(ctk.CTk):
         self.controller = NVFilterController()
         self.active_id = self.controller.current_profile
         self.current_view = None
+        self._drag = None
+        self._drag_hover_slot = None
+        self._mini_cards = []
 
         self._build_sidebar()
         self._content = ctk.CTkFrame(self, fg_color="transparent")
         self._content.pack(side="right", fill="both", expand=True, padx=(0, 14), pady=(6, 14))
         self._build_header()
+
+        self.bind_all("<B1-Motion>", self._dnd_motion)
+        self.bind_all("<ButtonRelease-1>", self._dnd_end)
 
         self.show_dashboard()
         self.update_game_status()
@@ -243,19 +335,84 @@ class App(ctk.CTk):
 
         right = ctk.CTkFrame(mid, fg_color="transparent")
         right.grid(row=0, column=1, sticky="nsew")
-        ctk.CTkLabel(right, text="مكتبة البريسيتات", font=ctk.CTkFont(size=14, weight="bold"),
+        ctk.CTkLabel(right, text="📥 مكتبة البريسيتات (Preset Library)",
+                     font=ctk.CTkFont(size=14, weight="bold"),
                      text_color="#cbd5e1").pack(anchor="w")
+        ctk.CTkLabel(right, text="اسحب بريسيتاً وأفلته على خانة 1/2/3 للصقه (يُطبَّق لاحقاً)",
+                     text_color="#64748b", font=ctk.CTkFont(size=10)).pack(anchor="w")
         lib = ctk.CTkScrollableFrame(right, fg_color="#131a24", corner_radius=14)
         lib.pack(fill="both", expand=True, pady=(6, 0))
         presets = self._load_presets()
         if not presets:
             ctk.CTkLabel(lib, text="لا توجد بريسيتات في presets/library",
                          text_color="#94a3b8").pack(pady=20)
+        self._mini_cards = []
         for path, p in presets:
-            MiniCard(lib, p, path, self._library_use).pack(fill="x", padx=4, pady=5)
+            card = MiniCard(lib, p, path, self._library_use, self)
+            card.pack(fill="x", padx=4, pady=5)
+            card.set_slot_button(self.active_id)
+            self._mini_cards.append(card)
 
         self._render_filters()
         self._refresh_boxes_active()
+
+    def _refresh_mini_buttons(self):
+        for card in getattr(self, "_mini_cards", []):
+            try:
+                card.set_slot_button(self.active_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ---------------- السحب والإفلات (Drag & Drop) ----------------
+    def _dnd_start(self, event, card):
+        self._drag = card
+        self._drag_hover_slot = None
+        self._set_status(f"جارٍ السحب: {card.preset.get('preset_name', '')} — أسقطه على خانة 1/2/3")
+
+    def _dnd_motion(self, event):
+        if not getattr(self, "_drag", None):
+            return
+        slot = self._slot_at(event.x_root, event.y_root)
+        if slot != self._drag_hover_slot:
+            self._clear_slot_hover()
+            self._drag_hover_slot = slot
+            if slot:
+                self._boxes[slot].set_drag_hover(True)
+
+    def _dnd_end(self, event):
+        if not getattr(self, "_drag", None):
+            return
+        card = self._drag
+        self._drag = None
+        self._clear_slot_hover()
+        slot = self._slot_at(event.x_root, event.y_root)
+        if slot:
+            self.controller.import_profile(card.preset_path, slot=slot)
+            self.select_profile(slot)
+            self._refresh_mini_buttons()
+            self._set_status(f"لُصق {card.preset.get('preset_name', '')} في الخانة {slot} — جاهز للتطبيق (Alt+F3)")
+        else:
+            self._set_status("لم تُسقط فوق خانة — جرّب مجدداً")
+
+    def _slot_at(self, x, y):
+        boxes = getattr(self, "_boxes", None)
+        if not boxes:
+            return None
+        for i, box in boxes.items():
+            try:
+                if not box.winfo_exists():
+                    continue
+                rx, ry = box.winfo_rootx(), box.winfo_rooty()
+                w, h = box.winfo_width(), box.winfo_height()
+                if w > 10 and rx <= x <= rx + w and ry <= y <= ry + h:
+                    return i
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
+    def _clear_slot_hover(self):
+        for slot, box in getattr(self, "_boxes", {}).items():
+            box.set_drag_hover(False)
 
     def select_profile(self, pid):
         self.controller.select_profile(pid)
@@ -264,6 +421,7 @@ class App(ctk.CTk):
         if boxes and self.current_view == "dashboard":
             self._refresh_boxes_active()
             self._render_filters()
+            self._refresh_mini_buttons()
         self._set_status(f"الخانة {pid} نشطة")
 
     def _refresh_boxes_active(self):
@@ -308,6 +466,7 @@ class App(ctk.CTk):
         self._set_status(f"تم تحميل البريسيت على الخانة {self.active_id}")
         self._refresh_boxes_active()
         self._render_filters()
+        self._refresh_mini_buttons()
 
     def _import_to_active(self):
         prof = self.controller.import_profile()
@@ -315,6 +474,7 @@ class App(ctk.CTk):
             self._set_status(f"تم استيراد البريسيت للخانة {self.active_id}")
             self._refresh_boxes_active()
             self._render_filters()
+            self._refresh_mini_buttons()
 
     def _export_active(self):
         path = self.controller.export_profile()
@@ -330,10 +490,10 @@ class App(ctk.CTk):
 
     def _apply_done(self, res):
         self._set_status("اكتمل التطبيق")
-        messagebox.showinfo("تطبيق",
-                            f"النتيجة:\n{res}\n\n"
-                            "أغلق الضرورة؟ افتح اللعبة واضغط Alt+F3 لتفعيل الفلاتر.\n"
-                            "ملاحظة: الكتابة في مخزن NVIDIA تتطلب إغلاق NVIDIA App مؤقتاً.")
+        alert("info", "تطبيق",
+              f"النتيجة:\n{res}\n\n"
+              "افتح اللعبة واضغط Alt+F3 لتفعيل الفلاتر.\n"
+              "ملاحظة: الكتابة في مخزن NVIDIA تتطلب إغلاق NVIDIA App مؤقتاً.")
 
     # ---------------- منشئ بريسيت ----------------
     def show_creator(self):
@@ -387,11 +547,11 @@ class App(ctk.CTk):
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(self._creator_schema(), fh, ensure_ascii=False, indent=2)
         self._set_status("حُفظ: " + path)
-        messagebox.showinfo("منشئ بريسيت", "حُفظ الملف:\n" + path)
+        alert("info", "منشئ بريسيت", "حُفظ الملف:\n" + path)
 
     def _creator_preview(self):
-        messagebox.showinfo("معاينة JSON",
-                            json.dumps(self._creator_schema(), ensure_ascii=False, indent=2))
+        alert("info", "معاينة JSON",
+              json.dumps(self._creator_schema(), ensure_ascii=False, indent=2))
 
     def _creator_apply(self):
         with open(TMP_SCHEMA, "w", encoding="utf-8") as fh:
@@ -399,7 +559,7 @@ class App(ctk.CTk):
         self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
         res = run_backend("import", str(self.active_id), TMP_SCHEMA)
         self._set_status("تم التطبيق")
-        messagebox.showinfo("استيراد", res)
+        alert("info", "استيراد", res)
 
     # ---------------- الألعاب ----------------
     def show_games(self):
