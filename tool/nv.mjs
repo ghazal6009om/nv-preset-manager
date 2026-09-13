@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execSync } from 'node:child_process';
 
 const LOCAL = process.env.LOCALAPPDATA;
 const OVERLAY_DB = path.join(LOCAL, 'NVIDIA Corporation', 'NVIDIA Overlay', 'CefCache', 'Default', 'IndexedDB', 'https_nvfile_0.indexeddb.leveldb');
@@ -65,6 +66,193 @@ function currentFilterPresets() {
   if (!buf) return null;
   const blobs = findJsonBlobs(buf);
   return blobs.length ? blobs[blobs.length - 1] : null;
+}
+
+function isStoreBusy() {
+  // هل يتولّى NVIDIA App/Overlay المخزن الآن؟ (الكتابة أثناء ذلك تُفشل أو تُهمَل)
+  try {
+    const out = execSync('tasklist /FO CSV /NH', { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    return /NVIDIA Overlay|NVIDIA App/i.test(out);
+  } catch (_) {
+    return false;
+  }
+}
+
+function stackFromExportFile(file, slot) {
+  // يدعم ملفات التصدير الخام (.nvpreset.json ببنية filterPresets) —
+  // يستخرج مكدس الخانة المطلوبة كما هو (يشمل فلاتر أصلية وغير معروفة).
+  let obj;
+  try { obj = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
+  if (!obj || !obj.filterPresets) return null;
+  for (const exe of Object.keys(obj.filterPresets)) {
+    const info = obj.filterPresets[exe].modsSlotsInfo;
+    if (!info) continue;
+    const s = (info.slots || []).find(x => Number(x.id) === Number(slot));
+    if (s && s.filterStack) return s.filterStack.filters;
+  }
+  return null;
+}
+
+function slotReadout(fp, slot) {
+  // قراءة اسماء الخانة وقيمها من بيانات المخزنة لفحص التطبيق
+  let filters = [];
+  if (fp && fp.filterPresets) {
+    for (const exe of Object.keys(fp.filterPresets)) {
+      const info = fp.filterPresets[exe].modsSlotsInfo;
+      if (!info) continue;
+      const s = (info.slots || []).find(x => Number(x.id) === Number(slot));
+      if (s && s.filterStack) filters = s.filterStack.filters;
+      break;
+    }
+  }
+  return filters.map(f => f.name + '{' + (f.controls || []).map(c => c.displayName + '=' + c.currentUIValue).join(', ') + '}').join(' + ') || '(فارغ)';
+}
+
+// ---- LevelDB log append (يرفع القيد: السجل الحالي قد يكون أصغر من القيمة) ----
+// CRC-32C (Castagnoli) مع Mask كما تستخدمه CEF/LevelDB:
+const CRC32C_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0x82F63B78 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32c(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = (CRC32C_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)) >>> 0;
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function crcMask(c) { c = ((c >>> 15) | (c << 17)) >>> 0; return (c + 0xa282ead8) >>> 0; }
+
+const LOG_BLOCK = 32768;
+
+function jsonEnd(buf, start) {
+  // end index (after closing brace) of the JSON object starting at `start`, or -1
+  let depth = 0, inStr = false, esc = false;
+  for (let j = start; j < buf.length; j++) {
+    const ch = buf[j];
+    if (inStr) { if (esc) esc = false; else if (ch === 0x5c) esc = true; else if (ch === 0x22) inStr = false; }
+    else if (ch === 0x22) inStr = true;
+    else if (ch === 0x7b) depth++;
+    else if (ch === 0x7d) { depth--; if (depth === 0) return j + 1; }
+  }
+  return -1;
+}
+
+function encodeVarint(n) {
+  const b = [];
+  while (true) {
+    const x = n & 0x7f;
+    n >>>= 7;
+    if (n) b.push(x | 0x80); else { b.push(x); break; }
+  }
+  return Buffer.from(b);
+}
+
+// يعود بـ {varStart, varLen} إذا كانت أطوال الـ varint قبل JSON تطابق طوله تماماً
+function matchValueVarint(buf, v) {
+  const jlen = jsonEnd(buf, v) - v;
+  if (jlen <= 0) return null;
+  for (let s = v - 1; s >= Math.max(0, v - 8); s--) {
+    let val = 0, sh = 0;
+    for (let k = 0; k < 5; k++) {
+      const b = buf[s + k];
+      val |= (b & 0x7f) << sh;
+      if (!(b & 0x80)) {
+        if (s + k + 1 === v && val === jlen) return { varStart: s, varLen: k + 1 };
+        break;
+      }
+      sh += 7;
+    }
+  }
+  return null;
+}
+
+// آخر سجل FULL (يبدأ بـ header صحيح CRC) يحتوي على قيمة الفلاتر — قد يكون أطول من نافذة واحدة
+function findLastPresetRecord(buf) {
+  const nd = Buffer.from('{"filterPresets"', 'latin1');
+  const hits = [];
+  let i = 0;
+  while ((i = buf.indexOf(nd, i)) >= 0) { hits.push(i); i++; }
+  for (let h = hits.length - 1; h >= 0; h--) {
+    const v = hits[h];
+    if (!matchValueVarint(buf, v)) continue;
+    const jlen = jsonEnd(buf, v) - v;
+    const minH = Math.max(0, (v + jlen) - 7 - 65535);
+    for (let H = v - 8; H >= minH; H--) {
+      const len = buf.readUInt16LE(H + 4);
+      if (buf.readUInt8(H + 6) !== 1) continue;
+      if (H + 7 + len > buf.length) continue;
+      if (v < H + 7 || v >= H + 7 + len) continue;
+      const payload = buf.subarray(H + 7, H + 7 + len);
+      const typeAndData = Buffer.concat([Buffer.from([1]), payload]);
+      if (crcMask(crc32c(typeAndData)) === buf.readUInt32LE(H)) {
+        return { H, len, payloadStart: H + 7, payload, v };
+      }
+    }
+  }
+  throw new Error('تعذّر العثور على السجل الأخير الحاوي على الفلاتر.');
+}
+
+function lastValueOffset(buf) {
+  try { return findLastPresetRecord(buf).v; } catch (_) { return -1; }
+}
+
+function appendValue(dir, newValueObj) {
+  // ينسخ السجل الأخير كاملاً، يستبدل كل نسخ JSON الفلاتر داخل البلووك (مع varint الطول)،
+  // يعيد حساب CRC، ويلحق سجلاً جديداً نهاية ملف المخزن — يعمل حتى لو كان موضع القيمة أصغر.
+  let file = null, bestMtime = -1, rec = null;
+  for (const f of fs.readdirSync(dir).filter(f => /\.log$/i.test(f))) {
+    const p = path.join(dir, f);
+    let b;
+    try { b = fs.readFileSync(p); } catch (_) { continue; }
+    let r;
+    try { r = findLastPresetRecord(b); } catch (_) { continue; }
+    const mt = fs.statSync(p).mtimeMs;
+    if (mt > bestMtime) { bestMtime = mt; file = f; rec = r; rec.buf = b; }
+  }
+  if (!file) throw new Error('لم يُعثر على مخزن الفلاتر الحالي.');
+
+  // حدّد مواضع كل نسخ قيمة الفلاتر داخل هذا السجل
+  const nd = Buffer.from('{"filterPresets"', 'latin1');
+  const copies = [];
+  let i = 0;
+  const rel = rec.payload;
+  while ((i = rel.indexOf(nd, i)) >= 0) {
+    const mv = matchValueVarint(rel, i);
+    if (mv) {
+      const jlen = jsonEnd(rel, i) - i;
+      if (jlen > 0 && mv.varStart >= 0 && i + jlen <= rel.length) copies.push({ varStart: mv.varStart, jsonStart: i, jsonEnd: i + jlen });
+    }
+    i++;
+  }
+  if (!copies.length) throw new Error('تعذّر تحديد مواضع قيمة الفلاتر داخل السجل.');
+
+  const newJSON = Buffer.from(JSON.stringify(newValueObj), 'latin1');
+  let head = Buffer.from(rel);
+  head.writeBigUInt64LE(head.readBigUInt64LE(0) + 1n, 0);   // bump sequence
+  // استبدال من الخلف لتجنّب إزاحة المواضع
+  for (let k = copies.length - 1; k >= 0; k--) {
+    const c = copies[k];
+    head = Buffer.concat([head.subarray(0, c.varStart), encodeVarint(newJSON.length), newJSON, head.subarray(c.jsonEnd)]);
+  }
+
+  if (head.length > LOG_BLOCK - 7) throw new Error('البريسيت كبير جداً لسجل واحد (' + head.length + ' > ' + (LOG_BLOCK - 7) + ').');
+  const typeAndData = Buffer.concat([Buffer.from([1]), head]);
+  const header = Buffer.alloc(7);
+  header.writeUInt32LE(crcMask(crc32c(typeAndData)), 0);
+  header.writeUInt16LE(head.length, 4);
+  header.writeUInt8(1, 6);                                     // type=FULL record
+  const record = Buffer.concat([header, head]);
+
+  const p = path.join(dir, file);
+  const size = fs.statSync(p).size;
+  const rem = size % LOG_BLOCK;
+  if (rem) fs.appendFileSync(p, Buffer.alloc(LOG_BLOCK - rem)); // حشو لحدود البلووك كما يفعل LevelDB
+  fs.appendFileSync(p, record);
+  return { method: 'append', file, batchLen: head.length, seq: Number(head.readBigUInt64LE(0)), copies: copies.length };
 }
 
 // ---- control schema templates confirmed from the real NVIDIA store ----
@@ -261,19 +449,20 @@ function spliceValue(dir, newValueObj) {
   return { file: best.file, blobLen: best.blob.length, newLen: newS.length, padLen: pad.length };
 }
 
+const leanFilter = (f) => ({ id: f.id, name: f.name, isSelected: f.isSelected, stackIdx: f.stackIdx, controls: f.controls });
+
 function leanBundle(fp, exe, slot, filters) {
   // NVIDIA regenerates UI-only fields (isExpanded/errorCodes/isVisible/isPPEFilter);
   // dropping them keeps the bundle short so it always fits the existing value slot.
-  const lean = (f) => ({ id: f.id, name: f.name, isSelected: f.isSelected, stackIdx: f.stackIdx, controls: f.controls });
   const slots = [];
   const info = fp.filterPresets[exe].modsSlotsInfo;
   for (let s = 0; s <= 3; s++) {
     const cur = (info.slots || [])[s];
     if (s === slot) {
-      slots.push({ filterStack: { filters: filters.map(lean), selectedFilterCount: filters.length, upButtonDisabled: false, downButtonDisabled: true }, id: s, altText: String(s) });
+      slots.push({ filterStack: { filters: filters.map(leanFilter), selectedFilterCount: filters.length, upButtonDisabled: false, downButtonDisabled: true }, id: s, altText: String(s) });
     } else {
       const fs0 = (cur && cur.filterStack || { filters: [] });
-      slots.push({ filterStack: { filters: (fs0.filters || []).map(lean), selectedFilterCount: fs0.selectedFilterCount || 0, upButtonDisabled: fs0.upButtonDisabled !== false, downButtonDisabled: fs0.downButtonDisabled !== false }, id: s, altText: cur && cur.altText != null ? cur.altText : String(s) });
+      slots.push({ filterStack: { filters: (fs0.filters || []).map(leanFilter), selectedFilterCount: fs0.selectedFilterCount || 0, upButtonDisabled: fs0.upButtonDisabled !== false, downButtonDisabled: fs0.downButtonDisabled !== false }, id: s, altText: cur && cur.altText != null ? cur.altText : String(s) });
     }
   }
   return { filterPresets: { [exe]: { anselSlotsInfo: fp.filterPresets[exe].anselSlotsInfo, modsSlotsInfo: { lastSlotIdx: info.lastSlotIdx == null ? 3 : info.lastSlotIdx, slots } } } };
@@ -336,14 +525,22 @@ const [,, cmd, ...args] = process.argv;
       break;
     }
     case 'import': {
-      // import <1|2|3> <preset[,preset...]>
+      // import <1|2|3> <preset[,preset...]>  (أو ملف تصدير .nvpreset.json)
       const slot = Number(args[0]);
       const names = (args[1] || '').split(',').filter(Boolean);
       if (!slot || slot < 1 || slot > 3 || !names.length) {
         console.log('الاستخدام: import <1|2|3> <preset[,preset...]>');
-        console.log('المتاح: vibrant-anime, soft-cinematic, crisp-realistic');
+        console.log('المتاح: vibrant-anime, soft-cinematic, crisp-realistic، أو مسار ملف JSON');
         return;
       }
+      if (isStoreBusy()) {
+        console.log('⛔ مخزن NVIDIA مشغول الآن (يعمل NVIDIA App / Overlay).');
+        console.log('الكتابة أثناء ذلك لا تُطبَّق وقد تُفشل الكتابة.');
+        console.log('المطلوب: أغلق NVIDIA App واللعبة (او اخرج من Freestyle) ثم أعد التطبيق،');
+        console.log('وبعدها افتح اللعبة واضغط Alt+F3 لترى التغيير.');
+        return;
+      }
+      const rawStack = stackFromExportFile(names[0], slot);
       fs.mkdirSync(BACKUPS, { recursive: true });
       const label = 'auto-' + new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
       fs.mkdirSync(path.join(BACKUPS, label), { recursive: true });
@@ -364,18 +561,31 @@ const [,, cmd, ...args] = process.argv;
       const exes = Object.keys(fp.filterPresets || {});
       if (!exes.length) { console.log('لا توجد لعبة مسجلة.'); return; }
       const exe = exes[0];
-      const filters = bakeSlot(names);
+      const filters = rawStack ? rawStack.map(leanFilter)
+                               : bakeSlot(names);
       if (!filters.length) { console.log('لا يوجد بريسيت بهذا الاسم أو الملف غير صالح.'); return; }
       const target = leanBundle(fp, exe, slot, filters);
       const dry = path.join(os.tmpdir(), 'nv-splice-dry');
-      let rep;
+      let rep, writeMethod;
       try {
         rep = spliceValue(path.join(dry, 'store'), target);
+        writeMethod = 'inplace';
       } catch (e) {
-        console.log('لا يمكن تطبيق الاستيراد الآن:');
-        console.log('  ' + (e.code === 'TOO_LONG' ? e.message : 'أغلق NVIDIA App واللعبة ثم أعد المحاولة.'));
-        console.log('(خُزِنَت نسخة أمان قبل أي تعديل: ' + label + ')');
-        return;
+        if (e.code !== 'TOO_LONG') {
+          console.log('لا يمكن تطبيق الاستيراد الآن:');
+          console.log('  ' + e.message);
+          console.log('(خُزِنَت نسخة أمان قبل أي تعديل: ' + label + ')');
+          return;
+        }
+        try {
+          rep = appendValue(path.join(dry, 'store'), target);   // السجل الحالي أصغر من القيمة
+          writeMethod = 'append';
+        } catch (e2) {
+          console.log('لا يمكن تطبيق الاستيراد الآن (السجل الحالي أصغر من القيمة):');
+          console.log('  ' + e2.message);
+          console.log('(خُزِنَت نسخة أمان قبل أي تعديل: ' + label + ')');
+          return;
+        }
       }
       const ver = readStore(path.join(dry, 'store'));
       const check = findJsonBlobs(ver);
@@ -385,15 +595,25 @@ const [,, cmd, ...args] = process.argv;
       if (!ok) { console.log('فشل التحقق من النسخة الجديدة (لا شيء تغيّر).'); return; }
       let rep2;
       try {
-        rep2 = spliceValue(OVERLAY_DB, target);
+        rep2 = writeMethod === 'append' ? appendValue(OVERLAY_DB, target) : spliceValue(OVERLAY_DB, target);
       } catch (e) {
-        if (e.code === 'TOO_LONG') console.log(e.message);
-        else console.log('تعذّر الكتابة في المخزن: أغلق NVIDIA App ثم أعد المحاولة.');
-        console.log('(آخر نسخة آمنة: ' + label + ' — استعدها بـ: restore ' + label + ')');
-        return;
+        if (e.code === 'TOO_LONG') {
+          try { rep2 = appendValue(OVERLAY_DB, target); }
+          catch (e3) {
+            console.log('تعذّر الكتابة في المخزن: ' + e3.message);
+            console.log('(آخر نسخة آمنة: ' + label + ' — استعدها بـ: restore ' + label + ')');
+            return;
+          }
+        } else {
+          console.log('تعذّر الكتابة في المخزن: أغلق NVIDIA App ثم أعد المحاولة.');
+          console.log('(آخر نسخة آمنة: ' + label + ' — استعدها بـ: restore ' + label + ')');
+          return;
+        }
       }
-      console.log('تم استيراد البريست إلى الخانة ' + slot + ' من الملف ' + rep2.file + '.');
+      console.log('تم استيراد البريست إلى الخانة ' + slot + ' (' + (writeMethod === 'append' ? 'إلحاق سجل جديد' : 'كتابة مكانية') + ') من ' + rep2.file + '.');
       console.log('نسخة أمان تلقائية قبل التطبيق: ' + label);
+      console.log('✔ التحقق من الكتابة — الخانة ' + slot + ' أصبحت:');
+      console.log('   ' + slotReadout(currentFilterPresets(), slot));
       console.log('افتح اللعبة واختر الخانة ' + slot + ' (Alt+F3) لرؤية النتيجة.');
       break;
     }

@@ -413,6 +413,8 @@ class App(ctk.CTk):
                       command=self._import_to_active).pack(side="left", padx=(12, 4), pady=14)
         ctk.CTkButton(bar, text="📤 تصدير", fg_color="#334155", hover_color="#475569",
                       command=self._export_active).pack(side="left", padx=4, pady=14)
+        ctk.CTkButton(bar, text="⚡ تطبيق ملف...", fg_color="#0e7490", hover_color="#155e75",
+                      command=self._apply_file).pack(side="right", padx=4, pady=14)
         ctk.CTkButton(bar, text="⚡ تطبيق (Alt+F3)", fg_color="#3b82f6", hover_color="#2563eb",
                       command=self._apply_active).pack(side="right", padx=12, pady=14)
 
@@ -570,6 +572,20 @@ class App(ctk.CTk):
         path = self.controller.export_profile()
         if path:
             self._set_status("تم التصدير: " + path)
+
+    def _apply_file(self):
+        path = filedialog.askopenfilename(title="اختر ملف بريسيت لتطبيقه على الخانة النشطة",
+                                          filetypes=[("Preset JSON", "*.json")])
+        if not path:
+            return
+        self.controller.import_profile(path)
+        self._refresh_boxes_active()
+        self._render_filters()
+        self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
+        def _run():
+            res = self.controller.apply_to_nvidia()
+            self.after(0, lambda: self._apply_done(res))
+        threading.Thread(target=_run, daemon=True).start()
 
     def _apply_active(self):
         self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
