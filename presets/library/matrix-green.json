@@ -1,0 +1,10 @@
+{
+  "preset_name": "matrix-green",
+  "description": "طابع سينمائي أخضر زيتي مستوحى من فيلم الماتركس: برودة مع تباين غامق",
+  "accent": "#22c55e",
+  "filters": [
+    { "name": "Color", "settings": { "Tint Color": 55, "Tint Intensity": 30, "Temperature": -40, "Vibrance": -60 } },
+    { "name": "Details", "settings": { "Sharpen": 30, "Clarity": 40, "HDR Toning": 20, "Bloom": 0 } },
+    { "name": "Brightness / Contrast", "settings": { "Exposure": 0, "Contrast": 40, "Highlights": -30, "Shadows": -30, "Gamma": -10 } }
+  ]
+}

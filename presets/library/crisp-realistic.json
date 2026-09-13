@@ -1,0 +1,10 @@
+{
+  "preset_name": "crisp-realistic",
+  "description": "واقعية عالية للألعاب الضخمة: حدة قوية وتفاصيل نظيفة دون تشبّع مفرط",
+  "accent": "#059669",
+  "filters": [
+    { "name": "Color", "settings": { "Tint Color": 35, "Tint Intensity": 40, "Temperature": 0, "Vibrance": 0 } },
+    { "name": "Details", "settings": { "Sharpen": 50, "Clarity": 0, "HDR Toning": 0, "Bloom": 0 } },
+    { "name": "Brightness / Contrast", "settings": { "Exposure": 0, "Contrast": 5, "Highlights": -10, "Shadows": 9, "Gamma": 0 } }
+  ]
+}

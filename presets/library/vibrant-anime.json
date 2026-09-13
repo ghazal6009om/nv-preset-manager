@@ -1,0 +1,10 @@
+{
+  "preset_name": "vibrant-anime",
+  "description": "ألوان زاهية ودافئة مناسبة لألعاب الأنمي: تشبع عالٍ مع حدة ناعمة",
+  "accent": "#f43f5e",
+  "filters": [
+    { "name": "Color", "settings": { "Tint Color": 0, "Tint Intensity": 0, "Temperature": 10, "Vibrance": 25 } },
+    { "name": "Details", "settings": { "Sharpen": 25, "Clarity": 20, "HDR Toning": 12, "Bloom": 0 } },
+    { "name": "Brightness / Contrast", "settings": { "Exposure": 5, "Contrast": 10, "Highlights": -5, "Shadows": 0, "Gamma": 0 } }
+  ]
+}
