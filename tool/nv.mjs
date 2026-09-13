@@ -108,21 +108,27 @@ const FILTER_TEMPLATES = {
 
 const NAME_TO_FX = { 'Color': 'Color.fx', 'Details': 'Details.fx', 'Brightness / Contrast': 'Adjustments.fx', 'Brightness/Contrast': 'Adjustments.fx', 'Brightness and Contrast': 'Adjustments.fx', 'Vignette': 'Vignette.fx' };
 
-// preset schema file: {"preset_name": "...", "filters":[{"name":"Color","settings":{"Temperature":-15,...}}]}
+// preset schema file: {"preset_name": "...", "filters":[{"name":"Color","settings":{...}}, ...]}
+// or {"filters_stack":[{"order":1,"name":"...","settings":{...}}, ...]}
+// Order of the array = stack order (index 0 = top layer), like Photoshop layers.
 function uiValsFromSchema(schema) {
-  const order = ['Color.fx', 'Details.fx', 'Adjustments.fx', 'Vignette.fx'];
+  const list = [];
+  if (Array.isArray(schema.filters_stack)) {
+    list.push(...[...schema.filters_stack].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
+  } else if (Array.isArray(schema.filters)) {
+    list.push(...schema.filters);
+  }
   const out = [];
-  const byName = Object.create(null);
-  for (const f of schema.filters || []) byName[String(f.name).trim()] = f.settings || {};
-  for (const fid of order) {
-    const tpl = FILTER_TEMPLATES[fid];
-    const key = Object.keys(NAME_TO_FX).find(k => NAME_TO_FX[k] === fid && byName[k] != null);
-    if (!key) continue;
-    const ui = tpl.controls.map(([disp], i) => {
-      const v = byName[key][disp];
-      return v == null ? tpl.controls[i][5] : v;
-    });
-    out.push([fid, ui]);
+  const seen = new Set();
+  for (const f of list || []) {
+    const fx = NAME_TO_FX[String(f.name).trim()];
+    if (!fx || seen.has(fx)) continue;
+    seen.add(fx);
+    const tpl = FILTER_TEMPLATES[fx];
+    const settings = f.settings || {};
+    const ui = tpl.controls.map(([disp], i) =>
+      settings[disp] == null ? tpl.controls[i][5] : settings[disp]);
+    out.push([fx, ui]);
   }
   return out;
 }
@@ -183,14 +189,18 @@ const LIBRARY = {
 
 function bakeSlot(presetArgs) {
   // presetArgs: library names or paths to preset schema JSON files; first match wins per filter
-  const merged = new Map(); // id -> ui
+  // Stack order = order of first appearance across presets (top layer first) — do NOT re-sort.
+  const seen = new Set();
+  const ordered = [];
   for (const arg of presetArgs) {
     const pairs = filterPairsFromPreset(arg);
     if (!pairs) continue;
-    for (const { id, ui } of pairs) if (!merged.has(id)) merged.set(id, ui);
+    for (const p of pairs) {
+      if (p && !seen.has(p.id)) { seen.add(p.id); ordered.push(p); }
+    }
   }
-  const order = ['Color.fx', 'Details.fx', 'Adjustments.fx', 'Vignette.fx'].filter(id => merged.has(id));
-  return order.map((id, i) => buildFilter(id, merged.get(id), presetArgs[0], i));
+  if (!ordered.length) return [];
+  return ordered.map((p, idx) => buildFilter(p.id, p.ui, presetArgs[0], idx));
 }
 
 function stackForSlot(id, names) {

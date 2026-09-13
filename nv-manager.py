@@ -300,12 +300,16 @@ class App(ctk.CTk):
         try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
+            filters = data.get("filters")
+            stack = data.get("filters_stack")
+            if isinstance(stack, list):
+                filters = sorted(stack, key=lambda f: f.get("order", 0))
             preset = {"preset_name": data.get("preset_name", data.get("name", os.path.splitext(os.path.basename(path))[0])),
                       "description": data.get("description", ""),
                       "accent": data.get("accent", "#3b82f6"),
-                      "filters": data.get("filters", [])}
+                      "filters": filters if isinstance(filters, list) else []}
             self.add_preset_to_library(preset)
-            alert("ok", "المكتبة", "أُضيف البريسيت إلى مكتبتك بنجاح.")
+            alert("ok", "المكتبة", "أُضيف البريسيت إلى مكتبتك بنجاح (بالترتيب المحفوظ).")
         except Exception as e:  # noqa: BLE001
             alert("info", "خطأ", f"تعذّر قراءة الملف:\n{e}")
 
@@ -446,20 +450,47 @@ class App(ctk.CTk):
                          text="لا توجد فلاتر نشطة.\nافتح Freestyle داخل اللعبة (Alt+F3)\nأو استورد/حمّل بريسيت إلى هذه الخانة.",
                          text_color="#94a3b8", justify="left").pack(anchor="w", padx=12, pady=8)
             return
-        for f in filters:
+        for idx, f in enumerate(filters):
             fname = f.get("name", "?")
             box = ctk.CTkFrame(self._filters_panel, corner_radius=10, border_width=1,
                                border_color="#2b3542", fg_color="#141c27")
             box.pack(fill="x", padx=6, pady=4)
             accent = {"Color": "#38bdf8", "Details": "#22d3ee",
                       "Brightness / Contrast": "#a855f7", "Vignette": "#f59e0b"}.get(fname, "#cbd5e1")
-            ctk.CTkLabel(box, text="◆ " + fname, font=ctk.CTkFont(size=13, weight="bold"),
-                         text_color=accent).pack(anchor="w", padx=12, pady=(8, 2))
+
+            head = ctk.CTkFrame(box, fg_color="transparent")
+            head.pack(fill="x", padx=12, pady=(8, 2))
+            ctk.CTkLabel(head, text=f"{idx + 1}. {fname}", font=ctk.CTkFont(size=13, weight="bold"),
+                         text_color=accent).pack(side="left")
+            ctk.CTkButton(head, text="↓", width=28, height=24, corner_radius=6,
+                          fg_color="#1e293b", hover_color="#334155",
+                          state="disabled" if idx == len(filters) - 1 else "normal",
+                          command=lambda i=idx: self._move_filter("down", i)
+                          ).pack(side="right", padx=(2, 0))
+            ctk.CTkButton(head, text="↑", width=28, height=24, corner_radius=6,
+                          fg_color="#1e293b", hover_color="#334155",
+                          state="disabled" if idx == 0 else "normal",
+                          command=lambda i=idx: self._move_filter("up", i)
+                          ).pack(side="right", padx=2)
+
             for k, v in f.get("settings", {}).items():
                 ctk.CTkLabel(box, text=f"{k}:  {v}",
                              text_color="#cbd5e1",
                              font=ctk.CTkFont(size=12)).pack(anchor="w", padx=14, pady=(0, 5))
             ctk.CTkLabel(box, text="", width=1).pack()
+
+    def _move_filter(self, who, idx):
+        prof = self.controller.data["profiles"].get(str(self.active_id), {})
+        fl = prof.get("filters")
+        if not fl or not 0 <= idx < len(fl):
+            return
+        j = idx - 1 if who == "up" else idx + 1
+        if not 0 <= j < len(fl):
+            return
+        fl[idx], fl[j] = fl[j], fl[idx]
+        self.controller.save_data()
+        self._render_filters()
+        self._set_status(f"أُعيد ترتيب الفلاتر (الطبقات) — اضغط ⚡ تطبيق لرؤية الأثر")
 
     # ---------------- السحب والإفلات ----------------
     def _dnd_start(self, event, card):

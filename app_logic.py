@@ -126,9 +126,13 @@ class NVFilterController:
                                                      "accent": ACCENTS.get(target),
                                                      "filters": []})
         profile["name"] = imported.get("preset_name", imported.get("name", profile.get("name", f"بروفايل {target}")))
-        profile["filters"] = imported.get("filters", imported.get("profiles", []) if isinstance(imported, dict) else [])
-        if not isinstance(profile["filters"], list):
-            profile["filters"] = []
+        filters = imported.get("filters")
+        stack = imported.get("filters_stack")
+        if isinstance(stack, list):
+            filters = sorted(stack, key=lambda f: f.get("order", 0))
+        if not isinstance(filters, list):
+            filters = []
+        profile["filters"] = filters
         self.save_data()
         if self.current_profile != target:
             self.select_profile(target)
