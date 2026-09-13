@@ -1,0 +1,10 @@
+{
+  "name": "حيوي أنيمي",
+  "description": "زيادة حيوية الألوان والأجواء العامة",
+  "filters": {
+    "Color": { "Tint Color": 0, "Tint Intensity": 0, "Temperature": 10, "Vibrance": 30 },
+    "Brightness/Contrast": { "Exposure": 5, "Contrast": 10, "Highlights": -5, "Shadows": 0, "Gamma": 0 },
+    "Details": { "Clarity": 20, "HDR Toning": 12, "Bloom": 0 },
+    "Sharpen": { "Sharpen": 25, "Ignore Film Grain": 100 }
+  }
+}

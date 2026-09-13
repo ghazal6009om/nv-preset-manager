@@ -1,0 +1,10 @@
+{
+  "name": "حاد واقعي",
+  "description": "الحدّة القصوى مع ألوان دافئة – الأفضل مع FSR",
+  "filters": {
+    "Color": { "Tint Color": 35, "Tint Intensity": 40, "Temperature": 0, "Vibrance": 0 },
+    "Brightness/Contrast": { "Exposure": 0, "Contrast": 5, "Highlights": -10, "Shadows": 9, "Gamma": 0 },
+    "Details": { "Clarity": 0, "HDR Toning": 0, "Bloom": 0 },
+    "Sharpen": { "Sharpen": 50, "Ignore Film Grain": 100 }
+  }
+}

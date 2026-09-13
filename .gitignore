@@ -1,0 +1,7 @@
+node_modules/
+backups/
+collected/
+tool/dump-keys.mjs
+tool/test-read.mjs
+tool/test-rocks.mjs
+*.nvpreset.json.tmp

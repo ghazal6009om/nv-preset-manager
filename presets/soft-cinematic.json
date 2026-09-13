@@ -1,0 +1,10 @@
+{
+  "name": "ناعم سينمائي",
+  "description": "أجواء هادئة فنية – مع النصوص والتصوير في اللعبة",
+  "filters": {
+    "Color": { "Tint Color": 0, "Tint Intensity": 0, "Temperature": 5, "Vibrance": 12 },
+    "Brightness/Contrast": { "Exposure": 0, "Contrast": 8, "Highlights": -5, "Shadows": 10, "Gamma": 0 },
+    "Details": { "Clarity": 35, "HDR Toning": 15, "Bloom": 8 },
+    "Sharpen": { "Sharpen": 15, "Ignore Film Grain": 100 }
+  }
+}
