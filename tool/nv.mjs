@@ -98,7 +98,46 @@ const FILTER_TEMPLATES = {
       ['Gamma', -1, 1, 0.02, 2, 0],
     ],
   },
+  'Vignette.fx': {
+    name: 'Vignette',
+    controls: [
+      ['Intensity', 0, 1, 0.01, 1, 50],
+    ],
+  },
 };
+
+const NAME_TO_FX = { 'Color': 'Color.fx', 'Details': 'Details.fx', 'Brightness / Contrast': 'Adjustments.fx', 'Brightness/Contrast': 'Adjustments.fx', 'Brightness and Contrast': 'Adjustments.fx', 'Vignette': 'Vignette.fx' };
+
+// preset schema file: {"preset_name": "...", "filters":[{"name":"Color","settings":{"Temperature":-15,...}}]}
+function uiValsFromSchema(schema) {
+  const order = ['Color.fx', 'Details.fx', 'Adjustments.fx', 'Vignette.fx'];
+  const out = [];
+  const byName = Object.create(null);
+  for (const f of schema.filters || []) byName[String(f.name).trim()] = f.settings || {};
+  for (const fid of order) {
+    const tpl = FILTER_TEMPLATES[fid];
+    const key = Object.keys(NAME_TO_FX).find(k => NAME_TO_FX[k] === fid && byName[k] != null);
+    if (!key) continue;
+    const ui = tpl.controls.map(([disp], i) => {
+      const v = byName[key][disp];
+      return v == null ? tpl.controls[i][5] : v;
+    });
+    out.push([fid, ui]);
+  }
+  return out;
+}
+
+function filterPairsFromPreset(presetArg) {
+  // returns [{id, uiValues}] ready for buildFilter
+  if (LIBRARY[presetArg]) {
+    return Object.entries(LIBRARY[presetArg]).map(([id, ui]) => ({ id, ui }));
+  }
+  if (fs.existsSync(presetArg)) {
+    const schema = JSON.parse(fs.readFileSync(presetArg, 'utf8'));
+    return uiValsFromSchema(schema).map(([id, ui]) => ({ id, ui }));
+  }
+  return null;
+}
 
 function fxPath(name) {
   // Use the driverstore NvCamera path seen on this machine; keep it symbolic & overridable.
@@ -142,19 +181,16 @@ const LIBRARY = {
   },
 };
 
-function bakeSlot(names) {
-  const order = ['Color.fx', 'Details.fx', 'Adjustments.fx'];
-  const filters = [];
-  for (const id of order) {
-    let uiVals = null;
-    for (const n of names) {
-      const def = LIBRARY[n];
-      if (def && def[id]) { uiVals = def[id]; break; }
-    }
-    if (!uiVals) continue;
-    filters.push(buildFilter(id, uiVals, names[0], filters.length));
+function bakeSlot(presetArgs) {
+  // presetArgs: library names or paths to preset schema JSON files; first match wins per filter
+  const merged = new Map(); // id -> ui
+  for (const arg of presetArgs) {
+    const pairs = filterPairsFromPreset(arg);
+    if (!pairs) continue;
+    for (const { id, ui } of pairs) if (!merged.has(id)) merged.set(id, ui);
   }
-  return filters;
+  const order = ['Color.fx', 'Details.fx', 'Adjustments.fx', 'Vignette.fx'].filter(id => merged.has(id));
+  return order.map((id, i) => buildFilter(id, merged.get(id), presetArgs[0], i));
 }
 
 function stackForSlot(id, names) {
@@ -319,6 +355,7 @@ const [,, cmd, ...args] = process.argv;
       if (!exes.length) { console.log('لا توجد لعبة مسجلة.'); return; }
       const exe = exes[0];
       const filters = bakeSlot(names);
+      if (!filters.length) { console.log('لا يوجد بريسيت بهذا الاسم أو الملف غير صالح.'); return; }
       const target = leanBundle(fp, exe, slot, filters);
       const dry = path.join(os.tmpdir(), 'nv-splice-dry');
       let rep;
@@ -355,7 +392,7 @@ const [,, cmd, ...args] = process.argv;
       const names = (args[1] || '').split(',').filter(Boolean);
       if (!slot || slot < 1 || slot > 3 || !names.length) {
         console.log('الاستخدام: bake <1|2|3> <preset[,preset...]>');
-        console.log('المتاح: vibrant-anime, soft-cinematic, crisp-realistic');
+        console.log('المتاح: vibrant-anime, soft-cinematic, crisp-realistic، أو مسار ملف JSON بـ صيغة المقترحة');
         return;
       }
       const exePath = 'C:\\Program Files\\HoYoPlay\\games\\Genshin Impact game\\GenshinImpact.exe';
