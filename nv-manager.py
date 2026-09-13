@@ -11,13 +11,12 @@ from tkinter import messagebox, filedialog
 
 import customtkinter as ctk
 
-APP = os.path.dirname(os.path.abspath(__file__))
-TOOL = os.path.join(APP, "tool", "nv.mjs")
-PRESETS_DIR = os.path.join(APP, "presets", "library")
-BACKUPS_DIR = os.path.join(APP, "backups")
-NODE = "node"
+from app_logic import NVFilterController, run_backend, ROOT, TMP_SCHEMA
 
-# filter template (display name, min ui, max ui, ui step, default)
+PRESETS_DIR = os.path.join(ROOT, "presets", "library")
+BACKUPS_DIR = os.path.join(ROOT, "backups")
+
+# (display name, min ui, max ui, ui step, default)
 FILTERS = [
     ("Color", [
         ("Tint Color", 0, 100, 1, 20),
@@ -44,71 +43,95 @@ FILTERS = [
 ]
 
 
-def run_backend(*args):
-    """Run the node tool and return its text output (utf-8)."""
-    try:
-        p = subprocess.run([NODE, TOOL, *args], capture_output=True, timeout=90)
-        out = p.stdout.decode("utf-8", errors="replace").strip()
-        err = p.stderr.decode("utf-8", errors="replace").strip()
-        return out if out else err
-    except Exception as e:  # noqa: BLE001
-        return f"خطأ في تشغيل الأداة: {e}"
+class ProfileBox(ctk.CTkFrame):
+    """صندوق بروفايل (1/2/3) مع حالة نشطة مضيئة."""
+
+    def __init__(self, master, profile_id, name, accent, on_click, **kw):
+        super().__init__(master, corner_radius=16, border_width=1, border_color="#2b3542",
+                         fg_color="#141c27", cursor="hand2", **kw)
+        self.profile_id = profile_id
+        self.accent = accent
+        self.on_click = on_click
+
+        ctk.CTkLabel(self, text=str(profile_id), font=ctk.CTkFont(size=30, weight="bold"),
+                     text_color=accent).pack(anchor="w", padx=16, pady=(14, 0))
+
+        self._name_lbl = ctk.CTkLabel(self, text=name, font=ctk.CTkFont(size=15, weight="bold"),
+                                      text_color="#e2e8f0", justify="left")
+        self._name_lbl.pack(anchor="w", padx=16, pady=(4, 0))
+
+        self._count_lbl = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=11),
+                                       text_color="#64748b", justify="left")
+        self._count_lbl.pack(anchor="w", padx=16, pady=(0, 12))
+
+        self.set_active(False)
+        for w in (self, self._name_lbl, self._count_lbl):
+            w.bind("<Button-1>", lambda e: self.on_click(self.profile_id))
+
+    def _hover(self, seq):
+        if seq == "<Enter>":
+            self.configure(border_color="#3b82f6")
+        elif seq == "<Leave>":
+            self._restore()
+
+    def set_active(self, active):
+        self.active = active
+        self._restore()
+
+    def _restore(self):
+        if getattr(self, "active", False):
+            self.configure(border_color=self.accent, border_width=3)
+            self._count_lbl.configure(text_color=self.accent)
+        else:
+            self.configure(border_color="#2b3542", border_width=1)
+            self._count_lbl.configure(text_color="#64748b")
+
+    def set_name(self, name):
+        self._name_lbl.configure(text=name)
+
+    def set_count(self, n):
+        self._count_lbl.configure(text=f"{n} فلتر")
 
 
-class Card(ctk.CTkFrame):
-    def __init__(self, master, preset, preset_path, slot_combo, status_cb, **kw):
-        super().__init__(master, corner_radius=14, border_width=1, border_color="#2b3542", **kw)
+class MiniCard(ctk.CTkFrame):
+    """بطاقة بريسيت مدمجة - تحميل إلى الخانة النشطة."""
+
+    def __init__(self, master, preset, preset_path, on_use, **kw):
+        super().__init__(master, corner_radius=12, border_width=1, border_color="#2b3542", **kw)
         accent = preset.get("accent", "#3b82f6")
-        header = ctk.CTkFrame(self, fg_color=accent, corner_radius=12, height=54)
-        header.pack(fill="x", padx=2, pady=(2, 8))
-        header.pack_propagate(False)
-        title = ctk.CTkLabel(header, text=preset.get("preset_name", "بريست"),
-                              font=ctk.CTkFont(size=17, weight="bold"), text_color="#ffffff")
-        title.pack(side="left", padx=14)
-        right = ctk.CTkLabel(header, text="NVIDIA Freestyle", font=ctk.CTkFont(size=11), text_color="#e2e8f0")
-        right.pack(side="right", padx=12)
-
-        desc = ctk.CTkLabel(self, text=preset.get("description", ""),
-                            text_color="#94a3b8", wraplength=430, justify="left")
-        desc.pack(anchor="w", padx=14)
-
+        strip = ctk.CTkFrame(self, fg_color=accent, corner_radius=6, height=5)
+        strip.pack(fill="x", padx=8, pady=(8, 2))
+        ctk.CTkLabel(self, text=preset.get("preset_name", "بريست"),
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#e2e8f0").pack(anchor="w", padx=12, pady=(4, 0))
         chips = "  ".join(f["name"] for f in preset.get("filters", []))
         if chips:
-            fl = ctk.CTkLabel(self, text="الفلاتر: " + chips, text_color="#64748b", font=ctk.CTkFont(size=11))
-            fl.pack(anchor="w", padx=14, pady=(4, 0))
-
-        def apply_():
-            status_cb("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
-            res = run_backend("import", slot_combo.get(), preset_path)
-            status_cb("تم التطبيق")
-            messagebox.showinfo("استيراد", res)
-
-        self._apply_btn = ctk.CTkButton(self, text="تطبيق على الخانة 1",
-                                        fg_color=accent, hover_color=accent,
-                                        command=apply_)
-        self._apply_btn.pack(anchor="e", padx=14, pady=(6, 12))
-        self._slot_combo = slot_combo
-
-    def refresh_label(self):
-        self._apply_btn.configure(text=f"تطبيق على الخانة {self._slot_combo.get()}")
+            ctk.CTkLabel(self, text=chips, text_color="#64748b",
+                         font=ctk.CTkFont(size=10)).pack(anchor="w", padx=12)
+        ctk.CTkButton(self, text="⬇ تحميل إلى الخانة النشطة", height=30, corner_radius=8,
+                      fg_color="#1e293b", hover_color="#334155", text_color="#cbd5e1",
+                      command=lambda: on_use(preset_path)).pack(anchor="e", padx=10, pady=(8, 10))
 
 
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("NV Preset Manager")
-        self.geometry("960x680")
-        self.minsize(860, 620)
+        self.geometry("1040x700")
+        self.minsize(900, 640)
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
 
+        self.controller = NVFilterController()
+        self.active_id = self.controller.current_profile
         self.current_view = None
+
         self._build_sidebar()
         self._content = ctk.CTkFrame(self, fg_color="transparent")
         self._content.pack(side="right", fill="both", expand=True, padx=(0, 14), pady=(6, 14))
         self._build_header()
 
-        self.show_library()
+        self.show_dashboard()
         self.update_game_status()
 
     # ---------------- layout ----------------
@@ -125,7 +148,7 @@ class App(ctk.CTk):
                      text_color="#ffffff").pack(pady=(0, 6))
 
         self._nav = [
-            ("🏷️  البريسيتات", self.show_library, "#3b82f6"),
+            ("🎯  البروفايلات", self.show_dashboard, "#38bdf8"),
             ("🛠️  منشئ بريسيت", self.show_creator, "#22d3ee"),
             ("🎮  الألعاب", self.show_games, "#a855f7"),
             ("💾  نسخ واستعادة", self.show_backup, "#f59e0b"),
@@ -138,7 +161,7 @@ class App(ctk.CTk):
             b.pack(fill="x", padx=10, pady=4)
             self._nav_btns.append(b)
 
-        ctk.CTkLabel(sb, text="مصدر البيانات: مخزن NVIDIA الداخلي",
+        ctk.CTkLabel(sb, text="البروفايلات تُقرأ من مخزن NVIDIA",
                      text_color="#475569", font=ctk.CTkFont(size=10)).pack(side="bottom", pady=12)
 
     def _build_header(self):
@@ -150,19 +173,14 @@ class App(ctk.CTk):
                                       text_color="#e2e8f0")
         self._game_lbl.pack(side="left", padx=14)
 
-        ctk.CTkLabel(hd, text="الخانة:", text_color="#94a3b8").pack(side="left", padx=(14, 4))
-        self._slot_combo = ctk.CTkComboBox(hd, values=["1", "2", "3"], width=64, state="readonly", justify="center")
-        self._slot_combo.set("1")
-        self._slot_combo.pack(side="left")
-
-        ctk.CTkButton(hd, text="تحديث", width=72, height=30, fg_color="#334155",
+        ctk.CTkButton(hd, text="⟳ تحديث من المخزن", width=120, height=30, fg_color="#334155",
                       hover_color="#475569", command=self.refresh_all).pack(side="right", padx=10)
 
         self._status = ctk.CTkLabel(hd, text="جاهز", text_color="#94a3b8", font=ctk.CTkFont(size=11))
         self._status.pack(side="right", padx=8)
 
     def _set_status(self, text):
-        self._status.configure(text=text[:80])
+        self._status.configure(text=str(text)[:80])
         self.update_idletasks()
 
     def _clear(self):
@@ -175,26 +193,149 @@ class App(ctk.CTk):
                         text_color="#0f172a" if i == index else "#cbd5e1",
                         hover_color="#1e293b")
 
-    # ---------------- views ----------------
-    def show_library(self):
-        self.current_view = "library"
+    # ---------------- الرئيسية: البروفايلات ----------------
+    def show_dashboard(self):
+        self.current_view = "dashboard"
         self._nav_highlight(0)
         self._clear()
-        self._slot_combo.configure(command=lambda _: self._refresh_card_labels())
-        frame = ctk.CTkScrollableFrame(self._content, label_text="مكتبة البريسيتات")
-        frame.pack(fill="both", expand=True)
+        body = ctk.CTkScrollableFrame(self._content)
+        body.pack(fill="both", expand=True)
+
+        # شريط الخانات الثلاث
+        boxes = ctk.CTkFrame(body, fg_color="transparent")
+        boxes.pack(fill="x", padx=6, pady=(2, 8))
+        cols = boxes.grid_columnconfigure((0, 1, 2), weight=1, uniform="box")
+
+        self._boxes = {}
+        for i in (1, 2, 3):
+            prof = self.controller.data["profiles"].get(str(i), {})
+            accent = {"1": "#38bdf8", "2": "#a855f7", "3": "#22c55e"}.get(str(i), "#38bdf8")
+            mb = ProfileBox(boxes, i, prof.get("name", f"بروفايل {i}"), accent,
+                            lambda pid=i: self.select_profile(pid))
+            mb.id = i
+            mb.set_count(len(prof.get("filters", [])))
+            mb.grid(row=0, column=i - 1, sticky="news", padx=6, pady=4, ipady=10)
+            self._boxes[i] = mb
+
+        # منتصف: قائمة الفلاتر النشطة + بطاقات المكتبة
+        mid = ctk.CTkFrame(body, fg_color="transparent")
+        mid.pack(fill="both", expand=True, padx=6)
+        mid.grid_columnconfigure(0, weight=1, minsize=420)
+        mid.grid_columnconfigure(1, weight=0, minsize=360)
+        mid.grid_rowconfigure(0, weight=1)
+
+        left = ctk.CTkFrame(mid, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self._filters_panel = ctk.CTkScrollableFrame(left, label_text="الفلاتر النشطة في الخانة الحالية",
+                                                     fg_color="#131a24", corner_radius=14)
+        self._filters_panel.pack(fill="both", expand=True)
+
+        # أزرار العمل
+        bar = ctk.CTkFrame(left, fg_color="#131a24", corner_radius=14, height=66)
+        bar.pack(fill="x", pady=(10, 0))
+        bar.pack_propagate(False)
+        ctk.CTkButton(bar, text="📥 استيراد", fg_color="#334155", hover_color="#475569",
+                      command=self._import_to_active).pack(side="left", padx=(12, 4), pady=14)
+        ctk.CTkButton(bar, text="📤 تصدير", fg_color="#334155", hover_color="#475569",
+                      command=self._export_active).pack(side="left", padx=4, pady=14)
+        ctk.CTkButton(bar, text="⚡ تطبيق (Alt+F3)", fg_color="#3b82f6", hover_color="#2563eb",
+                      command=self._apply_active).pack(side="right", padx=12, pady=14)
+
+        right = ctk.CTkFrame(mid, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew")
+        ctk.CTkLabel(right, text="مكتبة البريسيتات", font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color="#cbd5e1").pack(anchor="w")
+        lib = ctk.CTkScrollableFrame(right, fg_color="#131a24", corner_radius=14)
+        lib.pack(fill="both", expand=True, pady=(6, 0))
         presets = self._load_presets()
         if not presets:
-            ctk.CTkLabel(frame, text="لا توجد بريسيتات في presets/library", text_color="#94a3b8").pack(pady=20)
+            ctk.CTkLabel(lib, text="لا توجد بريسيتات في presets/library",
+                         text_color="#94a3b8").pack(pady=20)
         for path, p in presets:
-            Card(frame, p, path, self._slot_combo, self._set_status).pack(fill="x", padx=6, pady=7)
+            MiniCard(lib, p, path, self._library_use).pack(fill="x", padx=4, pady=5)
 
-    def _refresh_card_labels(self):
-        frame = self._content.winfo_children()[1]
-        for w in frame.winfo_children():
-            if isinstance(w, Card):
-                w.refresh_label()
+        self._render_filters()
+        self._refresh_boxes_active()
 
+    def select_profile(self, pid):
+        self.controller.select_profile(pid)
+        self.active_id = pid
+        boxes = getattr(self, "_boxes", None)
+        if boxes and self.current_view == "dashboard":
+            self._refresh_boxes_active()
+            self._render_filters()
+        self._set_status(f"الخانة {pid} نشطة")
+
+    def _refresh_boxes_active(self):
+        for i, box in self._boxes.items():
+            prof = self.controller.data["profiles"].get(str(i), {})
+            box.set_name(prof.get("name", f"بروفايل {i}"))
+            box.set_count(len(prof.get("filters", [])))
+            box.set_active(i == self.active_id)
+
+    def _render_filters(self):
+        for w in self._filters_panel.winfo_children():
+            w.destroy()
+        prof = self.controller.data["profiles"].get(str(self.active_id), {})
+        filters = prof.get("filters", [])
+        ctk.CTkLabel(self._filters_panel, text="الخانة النشطة: " + str(self.active_id),
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#38bdf8").pack(anchor="w", padx=12, pady=(8, 2))
+        if not filters:
+            ctk.CTkLabel(self._filters_panel,
+                         text="لا توجد فلاتر نشطة.\nافتح Freestyle داخل اللعبة (Alt+F3)\nأو استورد/حمّل بريسيت إلى هذه الخانة.",
+                         text_color="#94a3b8", justify="left").pack(anchor="w", padx=12, pady=8)
+            return
+        for f in filters:
+            fname = f.get("name", "?")
+            box = ctk.CTkFrame(self._filters_panel, corner_radius=10, border_width=1,
+                               border_color="#2b3542", fg_color="#141c27")
+            box.pack(fill="x", padx=6, pady=4)
+            accent = {"Color": "#38bdf8", "Details": "#22d3ee",
+                      "Brightness / Contrast": "#a855f7", "Vignette": "#f59e0b"}.get(fname, "#cbd5e1")
+            ctk.CTkLabel(box, text="◆ " + fname, font=ctk.CTkFont(size=13, weight="bold"),
+                         text_color=accent).pack(anchor="w", padx=12, pady=(8, 2))
+            settings = f.get("settings", {})
+            for k, v in settings.items():
+                ctk.CTkLabel(box, text=f"{k}:  {v}",
+                             text_color="#cbd5e1",
+                             font=ctk.CTkFont(size=12)).pack(anchor="w", padx=14, pady=(0, 5))
+            ctk.CTkLabel(box, text="", width=1).pack()
+
+    # ---------------- أزرار الخانة النشطة ----------------
+    def _library_use(self, path):
+        self.controller.import_profile(path)
+        self._set_status(f"تم تحميل البريسيت على الخانة {self.active_id}")
+        self._refresh_boxes_active()
+        self._render_filters()
+
+    def _import_to_active(self):
+        prof = self.controller.import_profile()
+        if prof:
+            self._set_status(f"تم استيراد البريسيت للخانة {self.active_id}")
+            self._refresh_boxes_active()
+            self._render_filters()
+
+    def _export_active(self):
+        path = self.controller.export_profile()
+        if path:
+            self._set_status("تم التصدير: " + path)
+
+    def _apply_active(self):
+        self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
+        def _run():
+            res = self.controller.apply_to_nvidia()
+            self.after(0, lambda: self._apply_done(res))
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _apply_done(self, res):
+        self._set_status("اكتمل التطبيق")
+        messagebox.showinfo("تطبيق",
+                            f"النتيجة:\n{res}\n\n"
+                            "أغلق الضرورة؟ افتح اللعبة واضغط Alt+F3 لتفعيل الفلاتر.\n"
+                            "ملاحظة: الكتابة في مخزن NVIDIA تتطلب إغلاق NVIDIA App مؤقتاً.")
+
+    # ---------------- منشئ بريسيت ----------------
     def show_creator(self):
         self.current_view = "creator"
         self._nav_highlight(1)
@@ -212,8 +353,8 @@ class App(ctk.CTk):
             for disp, lo, hi, step, default in controls:
                 row = ctk.CTkFrame(box, fg_color="transparent")
                 row.pack(fill="x", padx=14, pady=2)
-                lbl = ctk.CTkLabel(row, text=disp, width=150, text_color="#cbd5e1", anchor="w")
-                lbl.pack(side="left")
+                ctk.CTkLabel(row, text=disp, width=150, text_color="#cbd5e1",
+                             anchor="w").pack(side="left")
                 val = ctk.CTkLabel(row, text=str(default), width=48, text_color="#e2e8f0", anchor="e")
                 val.pack(side="right", padx=(4, 2))
                 steps = int((hi - lo) / step)
@@ -235,9 +376,11 @@ class App(ctk.CTk):
     def _creator_schema(self):
         filters = []
         for fname, controls in FILTERS:
-            settings = {disp: int(round(self._sliders[fname][disp].get())) for disp, _, _, _, _ in controls}
+            settings = {disp: int(round(self._sliders[fname][disp].get()))
+                        for disp, _, _, _, _ in controls}
             filters.append({"name": fname, "settings": settings})
-        return {"preset_name": "custom-preset", "description": "بريست مخصص من منشئ القيم", "filters": filters}
+        return {"preset_name": "custom-preset", "description": "بريست مخصص من منشئ القيم",
+                "filters": filters}
 
     def _creator_save(self):
         path = os.path.join(PRESETS_DIR, "user-" + time.strftime("%Y%m%d-%H%M%S") + ".json")
@@ -251,14 +394,14 @@ class App(ctk.CTk):
                             json.dumps(self._creator_schema(), ensure_ascii=False, indent=2))
 
     def _creator_apply(self):
-        path = os.path.join(PRESETS_DIR, "creator-now.json")
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(TMP_SCHEMA, "w", encoding="utf-8") as fh:
             json.dump(self._creator_schema(), fh, ensure_ascii=False, indent=2)
         self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
-        res = run_backend("import", self._slot_combo.get(), path)
+        res = run_backend("import", str(self.active_id), TMP_SCHEMA)
         self._set_status("تم التطبيق")
         messagebox.showinfo("استيراد", res)
 
+    # ---------------- الألعاب ----------------
     def show_games(self):
         self.current_view = "games"
         self._nav_highlight(2)
@@ -292,8 +435,10 @@ class App(ctk.CTk):
                          font=ctk.CTkFont(size=11)).pack(side="right", padx=12)
             ctk.CTkLabel(card, text=name, font=ctk.CTkFont(size=13, weight="bold"),
                          text_color="#e2e8f0").pack(anchor="w", padx=14, pady=(10, 0))
-            ctk.CTkLabel(card, text=path, text_color="#64748b", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=14, pady=(0, 10))
+            ctk.CTkLabel(card, text=path, text_color="#64748b",
+                         font=ctk.CTkFont(size=10)).pack(anchor="w", padx=14, pady=(0, 10))
 
+    # ---------------- نسخ واستعادة ----------------
     def show_backup(self):
         self.current_view = "backup"
         self._nav_highlight(3)
@@ -322,9 +467,13 @@ class App(ctk.CTk):
 
     # ---------------- actions ----------------
     def refresh_all(self):
+        self.controller.sync_from_nvidia()
+        self.active_id = self.controller.current_profile
         self.update_game_status()
-        if self.current_view == "library":
-            self.show_library()
+        if self.current_view == "dashboard":
+            self.show_dashboard()
+        elif self.current_view == "creator":
+            self.show_creator()
         elif self.current_view == "games":
             self.show_games()
         elif self.current_view == "backup":
@@ -334,7 +483,7 @@ class App(ctk.CTk):
         self._set_status("جار أخذ النسخة الاحتياطية...")
         res = run_backend("backup")
         self._set_status(res)
-        ctk.CTkMessagebox(self, title="نسخ احتياطي", message=res)
+        messagebox.showinfo("نسخ احتياطي", res)
 
     def _export_now(self):
         res = run_backend("export", "gui-" + time.strftime("%Y%m%d-%H%M%S"))
@@ -347,7 +496,7 @@ class App(ctk.CTk):
         if not path:
             return
         self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
-        res = run_backend("import", self._slot_combo.get(), path)
+        res = run_backend("import", str(self.active_id), path)
         self._set_status("تم التطبيق")
         messagebox.showinfo("استيراد", res)
 
@@ -368,13 +517,7 @@ class App(ctk.CTk):
         return out
 
     def _read_store(self):
-        tmp = os.path.join(os.environ.get("TEMP", "."), "nv-manager-store.json")
-        run_backend("json", tmp)
-        try:
-            with open(tmp, encoding="utf-8") as fh:
-                return json.load(fh)
-        except Exception:  # noqa: BLE001
-            return None
+        return self.controller._read_store()
 
     def _running_exes(self):
         out = set()

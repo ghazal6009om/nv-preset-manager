@@ -1,6 +1,8 @@
 node_modules/
 backups/
 collected/
+presets_data.json
+presets/creator-now.json
 tool/dump-keys.mjs
 tool/test-read.mjs
 tool/test-rocks.mjs
