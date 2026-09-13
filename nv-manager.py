@@ -581,14 +581,14 @@ class App(ctk.CTk):
         self.controller.import_profile(path)
         self._refresh_boxes_active()
         self._render_filters()
-        self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
+        self._set_status("جارٍ التطبيق...")
         def _run():
             res = self.controller.apply_to_nvidia()
             self.after(0, lambda: self._apply_done(res))
         threading.Thread(target=_run, daemon=True).start()
 
     def _apply_active(self):
-        self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
+        self._set_status("جارٍ التطبيق...")
         def _run():
             res = self.controller.apply_to_nvidia()
             self.after(0, lambda: self._apply_done(res))
@@ -596,10 +596,13 @@ class App(ctk.CTk):
 
     def _apply_done(self, res):
         self._set_status("اكتمل التطبيق")
-        alert("info", "تطبيق",
-              f"النتيجة:\n{res}\n\n"
-              "افتح اللعبة واضغط Alt+F3 لتفعيل الفلاتر.\n"
-              "ملاحظة: الكتابة في مخزن NVIDIA تتطلب إغلاق NVIDIA App مؤقتاً.")
+        ok = "تم استيراد" in res or "التحقق من الكتابة" in res
+        if ok:
+            alert("info", "تم التطبيق ⚡",
+                  "تم تطبيق الفلاتر والقيم بنجاح.\n"
+                  "افتح اللعبة واضغط (Alt + F3) لرؤية التغييرات.")
+        else:
+            alert("warning", "التطبيق", res)
 
     # ================= منشئ بريسيت =================
     def show_creator(self):
@@ -662,7 +665,7 @@ class App(ctk.CTk):
         schema = self._creator_schema()
         with open(TMP_SCHEMA, "w", encoding="utf-8") as fh:
             json.dump(schema, fh, ensure_ascii=False, indent=2)
-        self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
+        self._set_status("جارٍ التطبيق...")
         res = run_backend("import", str(self.active_id), TMP_SCHEMA)
         self._set_status("تم التطبيق")
         alert("info", "استيراد", res)
@@ -761,7 +764,7 @@ class App(ctk.CTk):
                                           filetypes=[("Preset JSON", "*.json")])
         if not path:
             return
-        self._set_status("جارٍ التطبيق... أغلق NVIDIA App إذا طُلب ذلك")
+        self._set_status("جارٍ التطبيق...")
         res = run_backend("import", str(self.active_id), path)
         self._set_status("تم التطبيق")
         messagebox.showinfo("استيراد", res)
