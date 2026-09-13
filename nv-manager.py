@@ -7,7 +7,7 @@ import glob
 import time
 import subprocess
 import threading
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, simpledialog
 
 import customtkinter as ctk
 
@@ -178,7 +178,10 @@ class LibraryCard(ctk.CTkFrame):
                                        corner_radius=8, fg_color="#1e293b", hover_color="#334155",
                                        text_color="#cbd5e1", font=ctk.CTkFont(size=11, weight="bold"),
                                        command=lambda: on_load(index))
-        self._load_btn.pack(side="right", fill="x", expand=True, padx=(4, 0))
+        self._load_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(row, text="📤", width=30, height=28, corner_radius=8,
+                      fg_color="#334155", hover_color="#475569",
+                      command=lambda: app._export_library_item(index)).pack(side="left")
         ctk.CTkButton(row, text="🗑️", width=32, height=28, corner_radius=8,
                       fg_color="#ef4444", hover_color="#dc2626",
                       command=lambda: on_delete(index)).pack(side="left")
@@ -411,6 +414,8 @@ class App(ctk.CTk):
         bar.pack_propagate(False)
         ctk.CTkButton(bar, text="📥 استيراد", fg_color="#334155", hover_color="#475569",
                       command=self._import_to_active).pack(side="left", padx=(12, 4), pady=14)
+        ctk.CTkButton(bar, text="💾 احفظ الخانة", fg_color="#059669", hover_color="#047857",
+                      command=self._save_active_to_library).pack(side="left", padx=4, pady=14)
         ctk.CTkButton(bar, text="📤 تصدير", fg_color="#334155", hover_color="#475569",
                       command=self._export_active).pack(side="left", padx=4, pady=14)
         ctk.CTkButton(bar, text="⚡ تطبيق ملف...", fg_color="#0e7490", hover_color="#155e75",
@@ -572,6 +577,49 @@ class App(ctk.CTk):
         path = self.controller.export_profile()
         if path:
             self._set_status("تم التصدير: " + path)
+
+    def _save_active_to_library(self):
+        slot = self.active_id
+        filters = self.controller._store_filters(slot)
+        if not filters:
+            alert("warning", "حفظ الخانة",
+                  f"الخانة {slot} فارغة الآن.\n"
+                  "فعّل فلاترك داخل اللعبة أولاً (Alt+F3) ثم اضغط إعادة الفحص، وحاول مجدداً.")
+            return
+        default = f"خانة {slot} — " + time.strftime("%H:%M")
+        name = simpledialog.askstring("حفظ في المكتبة",
+                                      f"اسم البريست المحفوظ (من الخانة {slot}):",
+                                      initialvalue=default, parent=self)
+        if not name or not name.strip():
+            return
+        preset = {"preset_name": name.strip(),
+                  "description": f"مُنقول مباشرة من إعدادات الخانة {slot} في مخزن NVIDIA",
+                  "accent": {"1": "#38bdf8", "2": "#a855f7", "3": "#22c55e"}.get(str(slot), "#38bdf8"),
+                  "filters": filters}
+        self.add_preset_to_library(preset)
+        alert("ok", "حفظ", f"حُفظت إعدادات الخانة {slot} في مكتبتك:\n«{name.strip()}»\n"
+                           "اسحبها على الخانة المطلوبة أو شاركها بزر 📤.")
+
+    def _export_library_item(self, index):
+        item = self.user_presets[index]
+        try:
+            raw = item.get("preset_name", item.get("name", "preset"))
+            safe = "".join(c for c in raw if c.isalnum() or c in "-_ ") or "preset"
+            path = filedialog.asksaveasfilename(
+                title="تصدير بريسيت للمشاركة",
+                initialfile=safe.strip().replace(" ", "-") + ".json",
+                defaultextension=".json",
+                filetypes=[("Preset JSON", "*.json")])
+            if not path:
+                return
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(item, fh, ensure_ascii=False, indent=2)
+            self._set_status("تم تصدير البريسيت للمشاركة: " + path)
+            alert("ok", "تصدير 📤",
+                  f"أُصدرّت البريسيت للمشاركة:\n{path}\n\n"
+                  "أرسل هذا الملف لأي شخص — يستورده بزر «➕ أضف من ملف»\nثم يسحبه على الخانة ويطبّق.")
+        except Exception as e:  # noqa: BLE001
+            alert("info", "خطأ", "تعذّر التصدير:\n" + str(e))
 
     def _apply_file(self):
         path = filedialog.askopenfilename(title="اختر ملف بريسيت لتطبيقه على الخانة النشطة",
