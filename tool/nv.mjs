@@ -534,11 +534,8 @@ const [,, cmd, ...args] = process.argv;
         return;
       }
       if (isStoreBusy()) {
-        console.log('⛔ مخزن NVIDIA مشغول الآن (يعمل NVIDIA App / Overlay).');
-        console.log('الكتابة أثناء ذلك لا تُطبَّق وقد تُفشل الكتابة.');
-        console.log('المطلوب: أغلق NVIDIA App واللعبة (او اخرج من Freestyle) ثم أعد التطبيق،');
-        console.log('وبعدها افتح اللعبة واضغط Alt+F3 لترى التغيير.');
-        return;
+        console.log('⚠ NVIDIA App/Overlay يعمل — الكتابة قد لا تُطبَّق فوراً.');
+        console.log('  لإنجاح أفضل: أغلق Overlay ثم أعد التطبيق.');
       }
       const rawStack = stackFromExportFile(names[0], slot);
       fs.mkdirSync(BACKUPS, { recursive: true });
