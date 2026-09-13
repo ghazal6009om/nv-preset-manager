@@ -3,6 +3,7 @@ __pycache__/
 backups/
 collected/
 presets_data.json
+user_library.json
 presets/creator-now.json
 tool/dump-keys.mjs
 tool/test-read.mjs
