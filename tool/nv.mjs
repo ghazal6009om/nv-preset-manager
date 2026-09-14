@@ -12,7 +12,9 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 
 const LOCAL = process.env.LOCALAPPDATA;
-const OVERLAY_DB = path.join(LOCAL, 'NVIDIA Corporation', 'NVIDIA Overlay', 'CefCache', 'Default', 'IndexedDB', 'https_nvfile_0.indexeddb.leveldb');
+const TOOL_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DISCOVERED_FILE = path.join(TOOL_DIR, 'discovered-filters.json');
+const OVERLAY_DB = process.env.NV_OVERLAY_DB || path.join(LOCAL, 'NVIDIA Corporation', 'NVIDIA Overlay', 'CefCache', 'Default', 'IndexedDB', 'https_nvfile_0.indexeddb.leveldb');
 const APP_DB = path.join(LOCAL, 'NVIDIA Corporation', 'NVIDIA App', 'CefCache', 'Default', 'IndexedDB', 'https_nvfile_0.indexeddb.leveldb');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const COLLECTED = path.join(ROOT, 'collected');
@@ -296,6 +298,23 @@ const FILTER_TEMPLATES = {
 
 const NAME_TO_FX = { 'Color': 'Color.fx', 'Details': 'Details.fx', 'Brightness / Contrast': 'Adjustments.fx', 'Brightness/Contrast': 'Adjustments.fx', 'Brightness and Contrast': 'Adjustments.fx', 'Vignette': 'Vignette.fx' };
 
+// ---- قوالب إضافية مكتشفة من مخزن NVIDIA (تتقبّل أي فلتر استخدمه أي مستخدم) ----
+(function loadDiscovered() {
+  try {
+    if (!fs.existsSync(DISCOVERED_FILE)) return;
+    const disc = JSON.parse(fs.readFileSync(DISCOVERED_FILE, 'utf8'));
+    for (const f of disc) {
+      if (!f || !f.id || !Array.isArray(f.controls) || !f.controls.length) continue;
+      if (!FILTER_TEMPLATES[f.id]) {
+        FILTER_TEMPLATES[f.id] = { name: f.name, controls: f.controls.map(c => [
+          c.displayName, c.minValue ?? -1, c.maxValue ?? 1, c.stepSize ?? 0.01, c.uiStepSize ?? 2, c.defaultValue ?? c.currentUIValue ?? 0,
+        ]) };
+      }
+      NAME_TO_FX[f.name] = f.id;
+    }
+  } catch (_) {}
+})();
+
 // preset schema file: {"preset_name": "...", "filters":[{"name":"Color","settings":{...}}, ...]}
 // or {"filters_stack":[{"order":1,"name":"...","settings":{...}}, ...]}
 // Order of the array = stack order (index 0 = top layer), like Photoshop layers.
@@ -321,14 +340,65 @@ function uiValsFromSchema(schema) {
   return out;
 }
 
+function fxIdBasename(idRaw) {
+  if (!idRaw) return null;
+  const base = String(idRaw).replace(/\\/g, '/').split('/').pop();
+  return base && /\.fx$/i.test(base) ? base : null;
+}
+
+// يعطي فلتراً بُني مباشرة من البيانات الخام (controls) — لا يفترض قالباً معروفاً.
+function buildFilterFromRaw(raw, idx) {
+  const base = fxIdBasename(raw.id) || (String(raw.name || '').trim().toLowerCase().endsWith('.fx') ? String(raw.name).trim() : null);
+  const id = base ? fxPath(base) : (raw.id || fxPath((String(raw.name || 'filter').trim() + '.fx')));
+  const controls = (raw.controls || []).map((c, i) => ({
+    controlType: c.controlType || 'slider', displayName: c.displayName,
+    currentValueArray: c.currentValueArray ?? [c.currentValue ?? 0], id: i,
+    dataType: c.dataType || 'float', dimension: c.dimension || 0, measureUnit: c.measureUnit || '%',
+    minValue: c.minValue ?? -1, maxValue: c.maxValue ?? 1, stepSize: c.stepSize ?? 0.01,
+    currentValue: c.currentValue ?? (Array.isArray(c.currentValueArray) ? c.currentValueArray[0] : 0),
+    uiMinValue: c.uiMinValue ?? -100, uiMaxValue: c.uiMaxValue ?? 100, uiStepSize: c.uiStepSize ?? 1,
+    currentUIValue: c.currentUIValue ?? ((c.currentValue ?? 0) * 100),
+    defaultValue: c.defaultValue ?? c.currentUIValue ?? 0,
+  }));
+  return { id, name: raw.name || '', isSelected: idx === 0, stackIdx: idx, controls };
+}
+
+function schemaObjectList(schema) {
+  if (Array.isArray(schema.filters_stack)) {
+    return [...schema.filters_stack].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }
+  if (Array.isArray(schema.filters)) return schema.filters;
+  return [];
+}
+
 function filterPairsFromPreset(presetArg) {
-  // returns [{id, uiValues}] ready for buildFilter
+  // returns [{id, ui}] أو [{raw, key}] — raw تعني فلتراً يمرر كما هو (بدون قالب)
   if (LIBRARY[presetArg]) {
-    return Object.entries(LIBRARY[presetArg]).map(([id, ui]) => ({ id, ui }));
+    return Object.entries(LIBRARY[presetArg]).map(([id, ui]) => ({ id, ui, key: id }));
   }
   if (fs.existsSync(presetArg)) {
     const schema = JSON.parse(fs.readFileSync(presetArg, 'utf8'));
-    return uiValsFromSchema(schema).map(([id, ui]) => ({ id, ui }));
+    const out = [];
+    const seen = new Set();
+    for (const f of schemaObjectList(schema)) {
+      if (f && Array.isArray(f.controls) && f.controls.length) {
+        const key = String(f.id || f.name || f.fx_id || '');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ raw: f, key });
+      } else {
+        if (!f || typeof f !== 'object') continue;
+        const fx = NAME_TO_FX[String(f.name || '').trim()];
+        if (!fx || seen.has(fx)) continue;
+        seen.add(fx);
+        const tpl = FILTER_TEMPLATES[fx];
+        const settings = f.settings || {};
+        const ui = tpl.controls.map(([disp], i) =>
+          settings[disp] == null ? tpl.controls[i][5] : settings[disp]);
+        out.push({ id: fx, ui, key: fx });
+      }
+    }
+    return out;
   }
   return null;
 }
@@ -384,11 +454,12 @@ function bakeSlot(presetArgs) {
     const pairs = filterPairsFromPreset(arg);
     if (!pairs) continue;
     for (const p of pairs) {
-      if (p && !seen.has(p.id)) { seen.add(p.id); ordered.push(p); }
+      if (p && !seen.has(p.key)) { seen.add(p.key); ordered.push(p); }
     }
   }
   if (!ordered.length) return [];
-  return ordered.map((p, idx) => buildFilter(p.id, p.ui, presetArgs[0], idx));
+  return ordered.map((p, idx) => (p.raw ? buildFilterFromRaw(p.raw, idx)
+                                       : buildFilter(p.id, p.ui, presetArgs[0], idx)));
 }
 
 function stackForSlot(id, names) {
@@ -658,6 +729,43 @@ const [,, cmd, ...args] = process.argv;
         }
       }
       console.log('أغلق NVIDIA App واللعبة قبل الاستعادة، ثم أعد فتحها. الاسم المستخدم:', label);
+      break;
+    }
+    case 'filters': {
+      // filters — اكتشاف كل أنواع الفلاتر + مقابضها من المخزن وحفظها قوالب
+      const fp = currentFilterPresets();
+      if (!fp) { console.log('لا توجد بيانات فلاتر (افتح Freestyle مرة ثم أعد المحاولة).'); return; }
+      const seen = new Map();
+      for (const exe of Object.keys(fp.filterPresets || {})) {
+        const m = fp.filterPresets[exe];
+        for (const kind of ['modsSlotsInfo', 'anselSlotsInfo']) {
+          const info = m[kind];
+          if (!info) continue;
+          for (const s of info.slots || []) {
+            for (const f of (((s || {}).filterStack || {}).filters) || []) {
+              const id = fxIdBasename(f.id) || String(f.name || 'unknown');
+              if (seen.has(id)) continue;
+              seen.set(id, {
+                id,
+                name: f.name,
+                controls: (f.controls || []).map(c => ({
+                  displayName: c.displayName, currentUIValue: c.currentUIValue, defaultValue: c.defaultValue,
+                  minValue: c.minValue, maxValue: c.maxValue, stepSize: c.stepSize, uiStepSize: c.uiStepSize,
+                  uiMinValue: c.uiMinValue, uiMaxValue: c.uiMaxValue,
+                })),
+              });
+            }
+          }
+        }
+      }
+      const arr = [...seen.values()];
+      fs.mkdirSync(TOOL_DIR, { recursive: true });
+      fs.writeFileSync(DISCOVERED_FILE, JSON.stringify(arr, null, 2));
+      console.log('الفلاتر المكتشفة في المخزن (' + arr.length + '):');
+      for (const f of arr) {
+        console.log('  ' + f.id + '  —  ' + f.name + '  —  ' + (f.controls || []).map(c => c.displayName).join(', '));
+      }
+      console.log('\nحُفظت القوالب في: ' + DISCOVERED_FILE);
       break;
     }
     case 'json': {

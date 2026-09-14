@@ -1,0 +1,69 @@
+[
+  {
+    "id": "Color.fx",
+    "name": "Color",
+    "controls": [
+      {
+        "displayName": "Tint Color",
+        "currentUIValue": 0,
+        "defaultValue": 20,
+        "minValue": 0,
+        "maxValue": 1,
+        "stepSize": 0.01,
+        "uiStepSize": 1,
+        "uiMinValue": 0,
+        "uiMaxValue": 100
+      },
+      {
+        "displayName": "Tint Intensity",
+        "currentUIValue": 0,
+        "defaultValue": 30,
+        "minValue": 0,
+        "maxValue": 1,
+        "stepSize": 0.01,
+        "uiStepSize": 1,
+        "uiMinValue": 0,
+        "uiMaxValue": 100
+      },
+      {
+        "displayName": "Temperature",
+        "currentUIValue": 10,
+        "defaultValue": 0,
+        "minValue": -1,
+        "maxValue": 1,
+        "stepSize": 0.02,
+        "uiStepSize": 2,
+        "uiMinValue": -100,
+        "uiMaxValue": 100
+      },
+      {
+        "displayName": "Vibrance",
+        "currentUIValue": 25,
+        "defaultValue": 0,
+        "minValue": -1,
+        "maxValue": 1,
+        "stepSize": 0.02,
+        "uiStepSize": 2,
+        "uiMinValue": -100,
+        "uiMaxValue": 100
+      }
+    ]
+  },
+  {
+    "id": "NightMode.fx",
+    "name": "Night Mode",
+    "controls": [
+      {
+        "displayName": "Intensity",
+        "currentUIValue": 45,
+        "defaultValue": 0,
+        "minValue": 0,
+        "maxValue": 1,
+        "stepSize": 0.01,
+        "uiStepSize": 1,
+        "uiMinValue": 0,
+        "uiMaxValue": 100
+      }
+    ]
+  }
+]

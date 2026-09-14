@@ -60,9 +60,30 @@ class NVFilterController:
             if s.get("id") == slot:
                 out = []
                 for f in s.get("filterStack", {}).get("filters", []):
-                    settings = {c.get("displayName"): c.get("currentUIValue")
-                                for c in f.get("controls", [])}
-                    out.append({"name": f.get("name"), "settings": settings})
+                    entry = {"name": f.get("name"), "settings": {}}
+                    controls = []
+                    for c in f.get("controls", []):
+                        entry["settings"][c.get("displayName")] = c.get("currentUIValue")
+                        controls.append({
+                            "displayName": c.get("displayName"),
+                            "currentUIValue": c.get("currentUIValue"),
+                            "currentValue": c.get("currentValue"),
+                            "currentValueArray": c.get("currentValueArray"),
+                            "minValue": c.get("minValue"),
+                            "maxValue": c.get("maxValue"),
+                            "stepSize": c.get("stepSize"),
+                            "uiMinValue": c.get("uiMinValue"),
+                            "uiMaxValue": c.get("uiMaxValue"),
+                            "uiStepSize": c.get("uiStepSize"),
+                            "defaultValue": c.get("defaultValue"),
+                            "measureUnit": c.get("measureUnit"),
+                            "dataType": c.get("dataType"),
+                            "controlType": c.get("controlType"),
+                        })
+                    entry["controls"] = controls
+                    if f.get("id"):
+                        entry["id"] = f["id"]
+                    out.append(entry)
                 return out
         return []
 
