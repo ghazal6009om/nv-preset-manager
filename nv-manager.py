@@ -232,6 +232,7 @@ class App(ctk.CTk):
 
         self.show_dashboard()
         self.update_game_status()
+        self.after(250, self._initial_sync)
 
     # ================= الشريط الجانبي =================
     def _build_sidebar(self):
@@ -795,6 +796,17 @@ class App(ctk.CTk):
             self.show_games()
         elif self.current_view == "backup":
             self.show_backup()
+
+    def _initial_sync(self):
+        self._set_status("قراءة مخزن NVIDIA...")
+        def _run():
+            try:
+                self.controller.sync_from_nvidia()
+                self.after(0, lambda: (self.show_dashboard(),
+                                       self._set_status("جاهز — الأرقام مطابقة لمخزن NVIDIA")))
+            except Exception as e:  # noqa: BLE001
+                self.after(0, lambda: self._set_status("تعذّرت القراءة: " + str(e)[:50]))
+        threading.Thread(target=_run, daemon=True).start()
 
     def _backup_now(self):
         self._set_status("جار أخذ النسخة الاحتياطية...")

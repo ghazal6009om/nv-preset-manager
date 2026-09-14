@@ -88,7 +88,7 @@ class NVFilterController:
         return []
 
     def sync_from_nvidia(self):
-        """بناء البيانات من مخزن NVIDIA الحالي."""
+        """بناء البيانات من مخزن NVIDIA الحالي وتبنيها فوراً (في الذاكرة وعلى القرص)."""
         profiles = {}
         for i in (1, 2, 3):
             filters = self._store_filters(i)
@@ -97,7 +97,8 @@ class NVFilterController:
                 "accent": ACCENTS.get(i, "#38bdf8"),
                 "filters": filters,
             }
-        data = {"active_profile": 1, "profiles": profiles}
+        data = {"active_profile": self.current_profile, "profiles": profiles}
+        self.data = data
         self._write(data)
         return data
 
